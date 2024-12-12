@@ -1,0 +1,8 @@
+ccxt
+pandas
+numpy
+tensorflow
+scikit-learn
+smtplib
+pyyaml
+python-dotenv
