@@ -1,8 +1,10 @@
-ccxt
+python-binance
 pandas
 numpy
 tensorflow
 scikit-learn
-smtplib
 pyyaml
 python-dotenv
+SQLAlchemy
+ta
+matplotlib
