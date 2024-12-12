@@ -1,5 +1,5 @@
-.env
-__pycache__
-.db
-.log
-venv
+.env             # Ignorer les fichiers .env (souvent utilisés pour stocker des variables d'environnement sensibles)
+*__pycache__     # Ignorer tous les dossiers nommés __pycache__ (fichiers temporaires générés par Python)
+*.db             # Ignorer tous les fichiers ayant l'extension .db (par exemple, des bases de données SQLite)
+*.log            # Ignorer tous les fichiers ayant l'extension .log (souvent utilisés pour des logs d'applications)
+*venv            # Ignorer tous les dossiers ou fichiers contenant "venv" (environnements virtuels Python)
