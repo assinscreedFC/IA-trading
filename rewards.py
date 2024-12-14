@@ -21,11 +21,12 @@ class Reward(Base):
 def define_reward_function():
     """
     Fonction de récompense améliorée pour inclure les moyennes mobiles.
+    Retourne des récompenses positives pour de bonnes prédictions et négatives pour les mauvaises.
     """
     def reward_function(predictions, actuals, last_input_closes, last_rsi, last_stoch_k, last_ma_court, last_ma_long):
         # Calcul de l'erreur absolue et récompense de base
         errors = tf.abs(predictions - actuals)
-        reward_base = 1.0 - errors
+        reward_base = 1.0 - errors  # Plus l'erreur est faible, plus la récompense est élevée
 
         # Calcul des différences et des signes
         actual_diff = actuals - last_input_closes
@@ -40,16 +41,6 @@ def define_reward_function():
 
         final_reward = reward_base + direction_factor
 
-        # Seuils
-        stable_threshold = 0.0005
-        moderate_threshold = 0.001
-        strong_up_threshold = 0.005
-
-        stable_condition = tf.abs(pred_diff) < (stable_threshold * (last_input_closes + 1e-6))
-        moderate_condition = tf.abs(pred_diff) < (moderate_threshold * (last_input_closes + 1e-6))
-
-        pred_direction_for_rsi = tf.where(stable_condition, tf.zeros_like(pred_sign), pred_sign)
-
         # Conditions RSI/Stoch
         overbought_rsi = last_rsi > 70
         oversold_rsi = last_rsi < 30
@@ -58,16 +49,16 @@ def define_reward_function():
 
         # Ajustements RSI/Stoch
         rsi_adj = tf.zeros_like(final_reward)
-        rsi_adj = tf.where(overbought_rsi & (pred_direction_for_rsi > 0), rsi_adj - 0.05, rsi_adj)
-        rsi_adj = tf.where(overbought_rsi & (pred_direction_for_rsi <= 0), rsi_adj + 0.05, rsi_adj)
-        rsi_adj = tf.where(oversold_rsi & (pred_direction_for_rsi < 0), rsi_adj - 0.05, rsi_adj)
-        rsi_adj = tf.where(oversold_rsi & (pred_direction_for_rsi >= 0), rsi_adj + 0.05, rsi_adj)
+        rsi_adj = tf.where(overbought_rsi & (pred_sign > 0), rsi_adj - 0.05, rsi_adj)
+        rsi_adj = tf.where(overbought_rsi & (pred_sign <= 0), rsi_adj + 0.05, rsi_adj)
+        rsi_adj = tf.where(oversold_rsi & (pred_sign < 0), rsi_adj - 0.05, rsi_adj)
+        rsi_adj = tf.where(oversold_rsi & (pred_sign >= 0), rsi_adj + 0.05, rsi_adj)
 
         stoch_adj = tf.zeros_like(final_reward)
-        stoch_adj = tf.where(overbought_stoch & (pred_direction_for_rsi > 0), stoch_adj - 0.05, stoch_adj)
-        stoch_adj = tf.where(overbought_stoch & (pred_direction_for_rsi <= 0), stoch_adj + 0.05, stoch_adj)
-        stoch_adj = tf.where(oversold_stoch & (pred_direction_for_rsi < 0), stoch_adj - 0.05, stoch_adj)
-        stoch_adj = tf.where(oversold_stoch & (pred_direction_for_rsi >= 0), stoch_adj + 0.05, stoch_adj)
+        stoch_adj = tf.where(overbought_stoch & (pred_sign > 0), stoch_adj - 0.05, stoch_adj)
+        stoch_adj = tf.where(overbought_stoch & (pred_sign <= 0), stoch_adj + 0.05, stoch_adj)
+        stoch_adj = tf.where(oversold_stoch & (pred_sign < 0), stoch_adj - 0.05, stoch_adj)
+        stoch_adj = tf.where(oversold_stoch & (pred_sign >= 0), stoch_adj + 0.05, stoch_adj)
 
         final_reward += (rsi_adj + stoch_adj)
 
@@ -83,12 +74,12 @@ def define_reward_function():
         confirmed_bearish = (trend_condition < 0) & bearish_rsi_stoch
 
         trend_adj = tf.where(
-            confirmed_bullish & (actual_sign > 0) & (pred_sign > 0) & moderate_condition,
+            confirmed_bullish & (actual_sign > 0) & (pred_sign > 0),
             trend_adj + 0.07,
             trend_adj
         )
         trend_adj = tf.where(
-            confirmed_bearish & (actual_sign < 0) & (pred_sign < 0) & moderate_condition,
+            confirmed_bearish & (actual_sign < 0) & (pred_sign < 0),
             trend_adj + 0.07,
             trend_adj
         )
@@ -99,19 +90,25 @@ def define_reward_function():
         both_overheated = (last_rsi > 80) & (last_stoch_k > 80)
         both_oversold = (last_rsi < 20) & (last_stoch_k < 20)
 
-        strong_up_condition = pred_diff > (strong_up_threshold * (last_input_closes + 1e-6))
-        strong_down_condition = pred_diff < -(strong_up_threshold * (last_input_closes + 1e-6))
+        strong_up_threshold = 0.005
+        strong_down_threshold = -0.005
+
+        strong_up_condition = pred_diff > (strong_up_threshold * last_input_closes)
+        strong_down_condition = pred_diff < (strong_down_threshold * last_input_closes)
 
         # Conditions de reversal
-        reversal_condition_overbought = both_overheated & (actual_sign > 0) & ((pred_sign <= 0) | stable_condition)
-        final_reward = tf.where(reversal_condition_overbought, final_reward + 0.05, final_reward)
+        reversal_condition_overbought = both_overheated & (actual_sign > 0) & (pred_sign <= 0)
+        reversal_condition_oversold = both_oversold & (actual_sign < 0) & (pred_sign >= 0)
 
-        reversal_condition_oversold = both_oversold & (actual_sign < 0) & ((pred_sign >= 0) | stable_condition)
-        final_reward = tf.where(reversal_condition_oversold, final_reward + 0.05, final_reward)
+        final_reward = tf.where(reversal_condition_overbought, final_reward - 0.05, final_reward)
+        final_reward = tf.where(reversal_condition_oversold, final_reward - 0.05, final_reward)
 
-        # Punition pour contradictions extrêmes
+        # Punition pour prédictions extrêmes
         final_reward = tf.where(both_overheated & strong_up_condition, final_reward - 0.1, final_reward)
         final_reward = tf.where(both_oversold & strong_down_condition, final_reward - 0.1, final_reward)
+
+        # Assurer que les récompenses sont dans une plage raisonnable
+        final_reward = tf.clip_by_value(final_reward, -1.0, 1.0)
 
         return final_reward
     return reward_function
@@ -120,8 +117,8 @@ def update_model_with_rewards(model, X, y, reward_function, optimizer):
     close_index = 3
     rsi_index = 5
     stoch_k_index = 6
-    ma_court_index = 9  # CHANGEMENT
-    ma_long_index = 10  # CHANGEMENT
+    ma_court_index = 9
+    ma_long_index = 10
 
     last_input_closes = X[:, -1, close_index:close_index+1]
     last_rsi = X[:, -1, rsi_index:rsi_index+1] * 100.0 
@@ -137,18 +134,21 @@ def update_model_with_rewards(model, X, y, reward_function, optimizer):
             tf.constant(last_input_closes, dtype=tf.float32),
             tf.constant(last_rsi, dtype=tf.float32),
             tf.constant(last_stoch_k, dtype=tf.float32),
-            tf.constant(last_ma_court, dtype=tf.float32),  # CHANGEMENT
-            tf.constant(last_ma_long, dtype=tf.float32)    # CHANGEMENT
+            tf.constant(last_ma_court, dtype=tf.float32),
+            tf.constant(last_ma_long, dtype=tf.float32)
         )
         mean_reward = tf.reduce_mean(rewards)
-        loss = -mean_reward
+        loss = -mean_reward  # Maximiser les récompenses
     gradients = tape.gradient(loss, model.trainable_variables)
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
     return loss.numpy(), mean_reward.numpy()
 
 def log_rewards(predictions, actual_prices, timestamps, symbol='BTCUSDT', db_url='rewards.db'):
+    # Utiliser la même fonction de récompense pour le logging
+    # Normalement, cela devrait être similaire à la fonction utilisée pendant l'entraînement
+    # Pour simplifier, utiliser 1 - erreur comme récompense
     errors = np.abs(predictions - actual_prices)
-    rewards = 1.0 - errors 
+    rewards = 1.0 - errors  # Assurer que les récompenses sont positives
 
     engine = create_engine(f'sqlite:///{db_url}', echo=False)
     Base.metadata.create_all(engine)
@@ -187,7 +187,7 @@ def analyze_rewards(db_url='rewards.db'):
         if not rewards_data:
             logging.info("Aucune récompense enregistrée.")
             return {}
-
+        
         df = pd.DataFrame([{
             'symbol': r.symbol,
             'timestamp': r.timestamp,

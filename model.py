@@ -1,29 +1,41 @@
+# model.py
+
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Bidirectional, Dropout, BatchNormalization, Dense, LayerNormalization
+from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, Bidirectional
 
-def build_lstm_model(n_steps: int, n_features: int) -> tf.keras.Model:
+def build_improved_model(n_steps: int, n_features: int) -> tf.keras.Model:
+    """
+    Construit et retourne un modèle LSTM amélioré avec des couches Bidirectional et GRU.
+
+    Args:
+        n_steps (int): Nombre de pas de temps dans chaque séquence.
+        n_features (int): Nombre de caractéristiques dans chaque pas de temps.
+
+    Returns:
+        tf.keras.Model: Modèle LSTM amélioré construit.
+    """
     model = Sequential()
-    model.add(Bidirectional(LSTM(units=256, return_sequences=True, input_shape=(n_steps, n_features))))
-    model.add(Dropout(rate=0.2))
-    model.add(BatchNormalization())
+    # Première couche Bidirectional LSTM
+    model.add(Bidirectional(LSTM(128, return_sequences=True, activation='tanh'), input_shape=(n_steps, n_features)))
+    model.add(Dropout(0.3))
     
-    model.add(Bidirectional(LSTM(units=128, return_sequences=True)))
-    model.add(Dropout(rate=0.2))
-    model.add(LayerNormalization())
+    # Deuxième couche GRU
+    model.add(GRU(64, return_sequences=True, activation='tanh'))
+    model.add(Dropout(0.3))
     
-    model.add(LSTM(units=64, return_sequences=False))
-    model.add(Dropout(rate=0.2))
-    model.add(BatchNormalization())
+    # Troisième couche GRU
+    model.add(GRU(32, activation='tanh'))
+    model.add(Dropout(0.3))
     
-    model.add(Dense(units=128, activation='relu'))
-    model.add(Dropout(rate=0.1))
-    model.add(BatchNormalization())
+    # Couches Dense
+    model.add(Dense(64, activation='relu'))
+    model.add(Dense(32, activation='relu'))
+    model.add(Dense(1))  # Prédiction du prix de clôture
     
-    model.add(Dense(units=64, activation='relu'))
-    model.add(Dropout(rate=0.1))
-    model.add(BatchNormalization())
+    # Compilation du modèle
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
     
-    model.add(Dense(units=1))
-    
+    model.summary()
     return model

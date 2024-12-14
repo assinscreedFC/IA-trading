@@ -1,12 +1,15 @@
-exchange: binance
-symbol: BTCUSDT
-amount: 0.001
-api_key: ""
-api_secret: ""
-db_path: trading_bot.db
-smtp_server: smtp.example.com
-smtp_port: 465
-sender_email: votre_email@example.com
-email_password: ""
-receiver_email: destinataire@example.com
-interval: 1m
+trading:
+  db_path: 'trading_bot.db'
+  symbol: 'BTCUSDT'
+  interval: '1m'
+  limit: 10000
+  n_steps: 10
+  train_ratio: 0.75
+  val_ratio: 0.15
+
+model:
+  epochs_mse: 20
+  batch_size_mse: 64
+  learning_rate_reward: 0.00005
+  epochs_reward: 5
+  batch_size_reward: 32

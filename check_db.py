@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker
 from database import MarketData, Indicator, Prediction
 import logging
 
-def check_market_data(session, limit=5):
+def check_market_data(session, limit=1000000):
     """
     Récupère et affiche les premières entrées de la table MarketData.
 
@@ -69,7 +69,7 @@ def check_database(db_path):
     
     try:
         # Vérifier MarketData
-        check_market_data(session, limit=5)
+        check_market_data(session, limit=1000000)
         
         # Vérifier Indicators
         check_indicators(session, limit=5)

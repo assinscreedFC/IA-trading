@@ -1,6 +1,7 @@
+# database.py
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, BigInteger, Index,
-    ForeignKeyConstraint
+    ForeignKeyConstraint, desc, asc
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -62,22 +63,29 @@ def get_engine(db_path):
     return engine
 
 def create_tables(engine):
-    # Supprimer les tables existantes pour enlever les anciennes contraintes
-    Base.metadata.drop_all(engine)
+    # Crée les tables si elles n'existent pas, sans les recréer
     Base.metadata.create_all(engine)
-    logging.info("Tables recréées ou déjà existantes.")
+    logging.info("Tables créées ou déjà existantes.")
 
 def get_session(engine):
     Session = sessionmaker(bind=engine)
     return Session()
 
 def store_market_data_to_db(data, symbol, db_path):
+    """
+    Insère les données de marché dans la base de données sans duplications.
+    """
     try:
         engine = get_engine(db_path)
-        create_tables(engine)
         session = get_session(engine)
         
-        market_data_objects = [
+        # Récupérer les timestamps déjà présents pour le symbole
+        existing_timestamps = set(
+            ts for (ts,) in session.query(MarketData.timestamp).filter(MarketData.symbol == symbol).all()
+        )
+        
+        # Filtrer les nouvelles données
+        new_data = [
             MarketData(
                 symbol=symbol,
                 timestamp=entry['timestamp'],
@@ -87,24 +95,35 @@ def store_market_data_to_db(data, symbol, db_path):
                 close=entry['close'],
                 volume=entry['volume']
             )
-            for entry in data
+            for entry in data if entry['timestamp'] not in existing_timestamps
         ]
         
-        session.bulk_save_objects(market_data_objects)
-        session.commit()
-        logging.info(f"{len(market_data_objects)} entrées insérées dans la base de données pour {symbol}.")
+        if new_data:
+            session.bulk_save_objects(new_data)
+            session.commit()
+            logging.info(f"{len(new_data)} nouvelles bougies insérées dans la base de données pour {symbol}.")
+        else:
+            logging.info("Aucune nouvelle bougie à insérer.")
     except Exception as e:
         session.rollback()
-        logging.error(f"Erreur lors de l'insertion des données dans la base de données : {e}")
+        logging.error(f"Erreur lors de l'insertion des données de marché : {e}")
     finally:
         session.close()
 
 def store_indicators_to_db(indicators: pd.DataFrame, symbol: str, db_path: str):
+    """
+    Insère les indicateurs dans la base de données sans duplications.
+    """
     try:
         engine = get_engine(db_path)
-        create_tables(engine)
         session = get_session(engine)
         
+        # Récupérer les timestamps déjà présents pour le symbole
+        existing_timestamps = set(
+            ts for (ts,) in session.query(Indicator.timestamp).filter(Indicator.symbol == symbol).all()
+        )
+        
+        # Filtrer les nouveaux indicateurs
         indicator_objects = [
             Indicator(
                 symbol=symbol,
@@ -114,22 +133,27 @@ def store_indicators_to_db(indicators: pd.DataFrame, symbol: str, db_path: str):
                 stochastic_d=row['stochastic_d'],
                 atr=row['atr']
             )
-            for _, row in indicators.iterrows()
+            for _, row in indicators.iterrows() if row['timestamp'] not in existing_timestamps
         ]
 
-        session.bulk_save_objects(indicator_objects)
-        session.commit()
-        logging.info(f"✅ {len(indicator_objects)} indicateurs insérés avec succès dans la base de données pour {symbol}.")
+        if indicator_objects:
+            session.bulk_save_objects(indicator_objects)
+            session.commit()
+            logging.info(f"{len(indicator_objects)} nouveaux indicateurs insérés avec succès dans la base de données pour {symbol}.")
+        else:
+            logging.info("Aucun nouvel indicateur à insérer.")
     except Exception as e:
         session.rollback()
-        logging.error(f"❌ Erreur lors de l'insertion des indicateurs : {e}")
+        logging.error(f"Erreur lors de l'insertion des indicateurs : {e}")
     finally:
         session.close()
 
 def store_predictions_to_db(predictions: pd.DataFrame, symbol: str, db_path: str):
+    """
+    Insère les prédictions dans la base de données sans duplications.
+    """
     try:
         engine = get_engine(db_path)
-        create_tables(engine)
         session = get_session(engine)
         
         required_columns = ['timestamp', 'predicted_close', 'confidence_level']
@@ -138,7 +162,13 @@ def store_predictions_to_db(predictions: pd.DataFrame, symbol: str, db_path: str
             raise ValueError(f"Les colonnes manquantes pour les prédictions : {missing}")
 
         predictions['timestamp'] = predictions['timestamp'].astype(int)
-
+        
+        # Récupérer les timestamps déjà présents pour le symbole
+        existing_timestamps = set(
+            ts for (ts,) in session.query(Prediction.timestamp).filter(Prediction.symbol == symbol).all()
+        )
+        
+        # Filtrer les nouvelles prédictions
         prediction_objects = [
             Prediction(
                 symbol=symbol,
@@ -146,14 +176,73 @@ def store_predictions_to_db(predictions: pd.DataFrame, symbol: str, db_path: str
                 predicted_close=row['predicted_close'],
                 confidence_level=row['confidence_level']
             )
-            for _, row in predictions.iterrows()
+            for _, row in predictions.iterrows() if row['timestamp'] not in existing_timestamps
         ]
         
-        session.bulk_save_objects(prediction_objects)
-        session.commit()
-        logging.info(f"✅ {len(prediction_objects)} prédictions insérées avec succès dans la base de données pour {symbol}.")
+        if prediction_objects:
+            session.bulk_save_objects(prediction_objects)
+            session.commit()
+            logging.info(f"{len(prediction_objects)} nouvelles prédictions insérées avec succès dans la base de données pour {symbol}.")
+        else:
+            logging.info("Aucune nouvelle prédiction à insérer.")
     except Exception as e:
         session.rollback()
-        logging.error(f"❌ Erreur lors de l'insertion des prédictions : {e}")
+        logging.error(f"Erreur lors de l'insertion des prédictions : {e}")
     finally:
         session.close()
+
+def get_latest_timestamp(symbol: str, db_path: str) -> int:
+    """
+    Récupère le dernier timestamp enregistré pour un symbole donné dans la base de données.
+    """
+    try:
+        engine = get_engine(db_path)
+        session = get_session(engine)
+        latest_ts = session.query(MarketData.timestamp).filter(MarketData.symbol == symbol).order_by(MarketData.timestamp.desc()).first()
+        if latest_ts:
+            logging.info(f"Dernier timestamp pour {symbol} : {latest_ts[0]}")
+            return latest_ts[0]
+        else:
+            logging.info(f"Aucun timestamp trouvé pour {symbol}, début à partir du début des données.")
+            return 0
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération du dernier timestamp : {e}")
+        return 0
+    finally:
+        session.close()
+
+def get_earliest_timestamp(symbol: str, db_path: str) -> int:
+    """
+    Récupère le premier timestamp enregistré pour un symbole donné dans la base de données.
+    """
+    try:
+        engine = get_engine(db_path)
+        session = get_session(engine)
+        earliest_ts = session.query(MarketData.timestamp).filter(MarketData.symbol == symbol).order_by(MarketData.timestamp.asc()).first()
+        if earliest_ts:
+            logging.info(f"Premier timestamp pour {symbol} : {earliest_ts[0]}")
+            return earliest_ts[0]
+        else:
+            logging.info(f"Aucun timestamp trouvé pour {symbol}, début à partir du début des données.")
+            return 0
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération du premier timestamp : {e}")
+        return 0
+    finally:
+        session.close()
+
+def delete_old_candles(session, symbol: str, candles_to_delete: int):
+    """
+    Supprime les bougies les plus anciennes pour un symbole donné.
+    
+    Args:
+        session: Session SQLAlchemy.
+        symbol (str): Symbole de trading.
+        candles_to_delete (int): Nombre de bougies à supprimer.
+    """
+    try:
+        old_candles = session.query(MarketData).filter(MarketData.symbol == symbol).order_by(MarketData.timestamp.asc()).limit(candles_to_delete).all()
+        for candle in old_candles:
+            session.delete(candle)
+    except Exception as e:
+        logging.error(f"Erreur lors de la suppression des bougies anciennes : {e}")
