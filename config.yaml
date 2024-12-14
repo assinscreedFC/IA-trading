@@ -2,14 +2,14 @@ trading:
   db_path: 'trading_bot.db'
   symbol: 'BTCUSDT'
   interval: '1m'
-  limit: 10000
-  n_steps: 10
+  limit: 2000
+  n_steps: 30
   train_ratio: 0.75
-  val_ratio: 0.15
+  val_ratio: 0.2
 
 model:
-  epochs_mse: 20
-  batch_size_mse: 64
-  learning_rate_reward: 0.00005
-  epochs_reward: 5
-  batch_size_reward: 32
+  epochs_mse: 50
+  batch_size_mse: 128
+  learning_rate_reward: 0.00004
+  epochs_reward: 20
+  batch_size_reward: 128

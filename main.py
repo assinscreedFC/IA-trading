@@ -330,7 +330,7 @@ def main():
         logging.error(f"Erreur lors de l'évaluation sur le test set : {e}")
         return
 
-    # Log des récompenses sur le jeu de test
+     # Log des récompenses sur le jeu de test
     try:
         test_length = len(y_test)
         test_timestamps = df_cleaned['timestamp'].iloc[-test_length:].values
@@ -378,11 +378,12 @@ def main():
     except Exception as e:
         logging.error(f"Erreur lors de la visualisation des prédictions : {e}")
 
-    # Visualisation de l'évolution des récompenses
+    '''### Visualisation de l'évolution des récompenses
     try:
         plot_reward_history(reward_history)
     except Exception as e:
         logging.error(f"Erreur lors de la visualisation de l'évolution des récompenses : {e}")
+    '''
 
     # Prédiction du prochain point futur
     try:
