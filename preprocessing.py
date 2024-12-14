@@ -26,7 +26,8 @@ def clean_market_data(data: pd.DataFrame) -> pd.DataFrame:
     return data_cleaned
 
 def clean_indicators_data(data: pd.DataFrame) -> pd.DataFrame:
-    required_columns = ['rsi', 'stochastic_k', 'stochastic_d', 'atr']
+    # CHANGEMENT: Inclure ma_court et ma_long dans les colonnes à nettoyer
+    required_columns = ['rsi', 'stochastic_k', 'stochastic_d', 'atr', 'ma_court', 'ma_long']  # CHANGEMENT
     missing_columns = [col for col in required_columns if col not in data.columns]
     if missing_columns:
         logging.error(f"Colonnes manquantes dans les données des indicateurs : {missing_columns}")
@@ -44,7 +45,8 @@ def clean_indicators_data(data: pd.DataFrame) -> pd.DataFrame:
     return data_cleaned
 
 def select_features_and_target(data: pd.DataFrame) -> (np.ndarray, np.ndarray):
-    feature_columns = ['open', 'high', 'low', 'close', 'volume', 'rsi', 'stochastic_k', 'stochastic_d', 'atr']
+    # CHANGEMENT: Inclure ma_court et ma_long dans les features
+    feature_columns = ['open', 'high', 'low', 'close', 'volume', 'rsi', 'stochastic_k', 'stochastic_d', 'atr', 'ma_court', 'ma_long']  # CHANGEMENT
     target_column = 'close'
     missing_features = [col for col in feature_columns if col not in data.columns]
     if missing_features:
@@ -113,7 +115,12 @@ def prepare_data_for_lstm(data: pd.DataFrame, n_steps: int) -> tuple:
         df_cleaned['stochastic_d'] = stochastic_rsi['stochastic_d']
         df_cleaned['atr'] = calculate_atr(df_cleaned, window=14)
         logging.info("Indicateurs calculés.")
-        
+
+        # CHANGEMENT: Calcul des moyennes mobiles pour déterminer la tendance
+        df_cleaned['ma_court'] = df_cleaned['close'].rolling(window=10).mean()  # CHANGEMENT
+        df_cleaned['ma_long'] = df_cleaned['close'].rolling(window=50).mean()   # CHANGEMENT
+        logging.info("Moyennes mobiles calculées (ma_court=10, ma_long=50).")
+
         df_cleaned = clean_indicators_data(df_cleaned)
         logging.info("Indicateurs nettoyés.")
         

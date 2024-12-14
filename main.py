@@ -26,8 +26,19 @@ def train_with_mse(model, X_train, y_train, X_val, y_val, epochs=200, batch_size
     """
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.0003)
     model.compile(optimizer=optimizer, loss='mse')
-    early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
-    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, verbose=1, min_lr=1e-5)
+    
+    early_stop = tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss', 
+        patience=20, 
+        restore_best_weights=True
+    )
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss', 
+        factor=0.5, 
+        patience=10, 
+        verbose=1, 
+        min_lr=1e-5
+    )
 
     history = model.fit(
         X_train, y_train,
@@ -40,19 +51,23 @@ def train_with_mse(model, X_train, y_train, X_val, y_val, epochs=200, batch_size
     return history
 
 def main():
+    # Initialisation des logs
     setup_logging()
     config = load_config()
 
     logging.info("Démarrage du bot de trading.")
     db_path = config.get('db_path', 'trading_bot.db')
 
+    # Connexion à la base de données et création des tables
     engine = get_engine(db_path)
     create_tables(engine)
 
+    # Paramètres de trading
     symbol = config.get('symbol', 'BTCUSDT')
     interval = config.get('interval', '1m')
-    limit = 100000  # Taille de dataset raisonnable
+    limit = 100000  # Nombre de bougies
 
+    # Initialisation de l'API Binance
     try:
         binance_api = setup_binance_api(config)
         if binance_api:
@@ -63,6 +78,7 @@ def main():
         logging.error(f"Échec de l'initialisation de l'API Binance : {e}")
         return
 
+    # Récupération des données de marché
     logging.info(f"Récupération des données de marché pour {symbol} avec intervalle {interval} et limite {limit}.")
     market_data = get_market_data(binance_api, symbol, interval, limit)
 
@@ -74,10 +90,12 @@ def main():
     df = pd.DataFrame(market_data)
     print(df.head(10))
 
+    # Stockage des données de marché dans la base de données
     store_market_data_to_db(market_data, symbol, db_path)
 
     try:
-        n_steps = 64  # Moins que 128, pour un équilibre entre réactivité et tendance
+        # Préparation des données pour le modèle LSTM
+        n_steps = 64  # Nombre de pas de temps
         X_train, y_train, X_val, y_val, X_test, y_test, scaler_features, scaler_target, df_cleaned = prepare_data_for_lstm(df, n_steps)
         print(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
         print(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
@@ -90,16 +108,16 @@ def main():
     joblib.dump(scaler_features, 'scaler_features.save')
     joblib.dump(scaler_target, 'scaler_target.save')
 
-    # Construction du modèle amélioré
+    # Construction du modèle LSTM
     n_features = X_train.shape[2]
     model = build_lstm_model(n_steps, n_features)
 
-    # PHASE 1 : MSE
+    # PHASE 1 : Entraînement initial avec MSE
     logging.info("Phase 1: Entraînement initial avec MSE.")
     train_with_mse(model, X_train, y_train, X_val, y_val, epochs=200, batch_size=512)
 
-    # PHASE 2 : Récompense
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001/2) # On met 0.00005 si on veut encore plus fin 
+    # PHASE 2 : Entraînement basé sur la récompense
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.00005)  # Learning rate réduit pour phase de récompense
     reward_function = define_reward_function()
 
     reward_epochs = 300
@@ -126,7 +144,7 @@ def main():
 
         logging.info(f"Epoch {epoch+1}/{reward_epochs} (récompense): Récompense moyenne sur l'epoch = {np.mean(epoch_rewards)}")
 
-    # Évaluation
+    # Évaluation sur le jeu de test
     predictions_test = model(X_test, training=False).numpy()
     predictions_test_inv = scaler_target.inverse_transform(predictions_test)
     y_test_inv = scaler_target.inverse_transform(y_test.reshape(-1,1))
@@ -135,29 +153,49 @@ def main():
     logging.info(f"MAE sur le test set: {mae_test}")
     print(f"MAE sur le test set: {mae_test}")
 
-    # Log récompenses
+    # Log des récompenses sur le jeu de test
     test_length = len(y_test)
     test_timestamps = df_cleaned['timestamp'].iloc[-test_length:].values
-    log_rewards(predictions=predictions_test_inv.flatten(), actual_prices=y_test_inv.flatten(),
-                timestamps=test_timestamps, symbol=symbol, db_url='rewards.db')
+    log_rewards(
+        predictions=predictions_test_inv.flatten(), 
+        actual_prices=y_test_inv.flatten(),
+        timestamps=test_timestamps, 
+        symbol=symbol, 
+        db_url='rewards.db'
+    )
 
+    # Analyse des récompenses
     stats = analyze_rewards(db_url='rewards.db')
     print("Statistiques des récompenses :", stats)
 
+    # Visualisation des indicateurs
     plot_all_indicators(df_cleaned, symbol)
 
-    # Visualisation prédictions Train/Test
+    # Visualisation des prédictions sur les jeux d'entraînement et de test
     predictions_train = model(X_train, training=False).numpy()
     predictions_train_inv = scaler_target.inverse_transform(predictions_train)
     y_train_inv = scaler_target.inverse_transform(y_train.reshape(-1,1))
 
     plt.figure(figsize=(14,7))
+    
+    # Jeu d'entraînement
     plt.plot(y_train_inv, label='Train Réel', color='green')
     plt.plot(predictions_train_inv, label='Train Prédit', color='orange')
 
+    # Jeu de test
     offset = len(y_train_inv)
-    plt.plot(np.arange(offset, offset+len(y_test_inv)), y_test_inv, label='Test Réel', color='blue')
-    plt.plot(np.arange(offset, offset+len(y_test_inv)), predictions_test_inv, label='Test Prédit', color='red')
+    plt.plot(
+        np.arange(offset, offset+len(y_test_inv)), 
+        y_test_inv, 
+        label='Test Réel', 
+        color='blue'
+    )
+    plt.plot(
+        np.arange(offset, offset+len(y_test_inv)), 
+        predictions_test_inv, 
+        label='Test Prédit', 
+        color='red'
+    )
 
     plt.title('Prédictions vs Valeurs Réelles (Train et Test)')
     plt.xlabel('Index échantillon (approx)')
@@ -168,7 +206,10 @@ def main():
 
     # Prédiction du prochain point futur
     new_data = df_cleaned.tail(n_steps)
-    new_data_input = new_data[['open','high','low','close','volume','rsi','stochastic_k','stochastic_d','atr']].values.reshape(1,n_steps,n_features)
+    # Assurez-vous que 'ma_court' et 'ma_long' sont inclus dans les features
+    new_data_input = new_data[
+        ['open','high','low','close','volume','rsi','stochastic_k','stochastic_d','atr','ma_court','ma_long']
+    ].values.reshape(1, n_steps, n_features)
     next_pred = model(tf.constant(new_data_input, dtype=tf.float32))
     next_pred_inv = scaler_target.inverse_transform(next_pred.numpy())
     print("Prochaine valeur de clôture prédite :", next_pred_inv[0,0])
