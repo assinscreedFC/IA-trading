@@ -1,10 +1,12 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, BigInteger, Index
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Float, BigInteger, Index,
+    ForeignKeyConstraint
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import logging
 import pandas as pd
 
-# Définir la base pour les modèles
 Base = declarative_base()
 
 class MarketData(Base):
@@ -19,7 +21,6 @@ class MarketData(Base):
     close = Column(Float, nullable=False)
     volume = Column(Float, nullable=False)
     
-    # Définir un index composite sur symbol et timestamp
     __table_args__ = (
         Index('idx_symbol_timestamp', 'symbol', 'timestamp'),
     )
@@ -35,63 +36,47 @@ class Indicator(Base):
     stochastic_d = Column(Float)
     atr = Column(Float)
     
-    # Définir un index composite sur symbol et timestamp
     __table_args__ = (
         Index('idx_indicators_symbol_timestamp', 'symbol', 'timestamp'),
     )
 
+class Prediction(Base):
+    __tablename__ = 'predictions'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, index=True, nullable=False)
+    timestamp = Column(BigInteger, index=True, nullable=False)
+    predicted_close = Column(Float, nullable=False)
+    confidence_level = Column(Float, nullable=False)
+    
+    __table_args__ = (
+        Index('idx_predictions_symbol_timestamp', 'symbol', 'timestamp'),
+        ForeignKeyConstraint(
+            ['symbol', 'timestamp'],
+            ['market_data.symbol', 'market_data.timestamp']
+        )
+    )
+
 def get_engine(db_path):
-    """
-    Crée et retourne un moteur SQLAlchemy connecté à la base de données spécifiée.
-    
-    Args:
-        db_path (str): Chemin vers le fichier de base de données SQLite.
-    
-    Returns:
-        sqlalchemy.engine.Engine: Moteur SQLAlchemy.
-    """
     engine = create_engine(f'sqlite:///{db_path}', echo=False)
     return engine
 
 def create_tables(engine):
-    """
-    Crée les tables définies par les modèles si elles n'existent pas déjà.
-    
-    Args:
-        engine (sqlalchemy.engine.Engine): Moteur SQLAlchemy.
-    """
+    # Supprimer les tables existantes pour enlever les anciennes contraintes
+    Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
-    logging.info("Tables créées ou déjà existantes.")
+    logging.info("Tables recréées ou déjà existantes.")
 
-# Créer une session factory
 def get_session(engine):
-    """
-    Crée et retourne une session SQLAlchemy.
-    
-    Args:
-        engine (sqlalchemy.engine.Engine): Moteur SQLAlchemy.
-    
-    Returns:
-        sqlalchemy.orm.session.Session: Session SQLAlchemy.
-    """
     Session = sessionmaker(bind=engine)
     return Session()
 
 def store_market_data_to_db(data, symbol, db_path):
-    """
-    Insère les données OHLCV dans la table `market_data`.
-    
-    Args:
-        data (list of dict): Liste des données OHLCV.
-        symbol (str): La paire de trading (ex. 'BTCUSDT').
-        db_path (str): Chemin vers le fichier de base de données SQLite.
-    """
     try:
         engine = get_engine(db_path)
         create_tables(engine)
         session = get_session(engine)
         
-        # Préparer les objets MarketData
         market_data_objects = [
             MarketData(
                 symbol=symbol,
@@ -105,30 +90,21 @@ def store_market_data_to_db(data, symbol, db_path):
             for entry in data
         ]
         
-        # Ajouter les données à la session
         session.bulk_save_objects(market_data_objects)
         session.commit()
         logging.info(f"{len(market_data_objects)} entrées insérées dans la base de données pour {symbol}.")
     except Exception as e:
+        session.rollback()
         logging.error(f"Erreur lors de l'insertion des données dans la base de données : {e}")
     finally:
         session.close()
 
 def store_indicators_to_db(indicators: pd.DataFrame, symbol: str, db_path: str):
-    """
-    Insère les valeurs RSI, Stochastic RSI (%K et %D), et ATR dans la table SQL 'indicators'.
-    
-    Args:
-        indicators (pd.DataFrame): DataFrame contenant les colonnes 'timestamp', 'rsi', 'stochastic_k', 'stochastic_d', et 'atr'.
-        symbol (str): Symbole de la paire de trading (ex. 'BTCUSDT').
-        db_path (str): Chemin vers le fichier de base de données SQLite.
-    """
     try:
         engine = get_engine(db_path)
         create_tables(engine)
         session = get_session(engine)
         
-        # Préparer les objets Indicator
         indicator_objects = [
             Indicator(
                 symbol=symbol,
@@ -138,17 +114,46 @@ def store_indicators_to_db(indicators: pd.DataFrame, symbol: str, db_path: str):
                 stochastic_d=row['stochastic_d'],
                 atr=row['atr']
             )
-            for index, row in indicators.iterrows()
+            for _, row in indicators.iterrows()
         ]
-        
-        # Ajouter les objets à la session
+
         session.bulk_save_objects(indicator_objects)
-        
-        # Commit la transaction
         session.commit()
         logging.info(f"✅ {len(indicator_objects)} indicateurs insérés avec succès dans la base de données pour {symbol}.")
     except Exception as e:
         session.rollback()
         logging.error(f"❌ Erreur lors de l'insertion des indicateurs : {e}")
+    finally:
+        session.close()
+
+def store_predictions_to_db(predictions: pd.DataFrame, symbol: str, db_path: str):
+    try:
+        engine = get_engine(db_path)
+        create_tables(engine)
+        session = get_session(engine)
+        
+        required_columns = ['timestamp', 'predicted_close', 'confidence_level']
+        if not all(col in predictions.columns for col in required_columns):
+            missing = [col for col in required_columns if col not in predictions.columns]
+            raise ValueError(f"Les colonnes manquantes pour les prédictions : {missing}")
+
+        predictions['timestamp'] = predictions['timestamp'].astype(int)
+
+        prediction_objects = [
+            Prediction(
+                symbol=symbol,
+                timestamp=row['timestamp'],
+                predicted_close=row['predicted_close'],
+                confidence_level=row['confidence_level']
+            )
+            for _, row in predictions.iterrows()
+        ]
+        
+        session.bulk_save_objects(prediction_objects)
+        session.commit()
+        logging.info(f"✅ {len(prediction_objects)} prédictions insérées avec succès dans la base de données pour {symbol}.")
+    except Exception as e:
+        session.rollback()
+        logging.error(f"❌ Erreur lors de l'insertion des prédictions : {e}")
     finally:
         session.close()
