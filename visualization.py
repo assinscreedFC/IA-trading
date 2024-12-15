@@ -56,9 +56,10 @@ def plot_all_indicators(df, symbol):
     except Exception as e:
         logging.error(f"Erreur lors de la visualisation combinée des indicateurs : {e}")
 
-def plot_predictions(train_true, train_pred, test_true, test_pred, n_steps, title='Prédictions vs Réel'):
+def plot_predictions(train_true, train_pred, test_true, test_pred, n_steps, n_out, title='Prédictions vs Réel'):
     """
     Affiche un graphique des prédictions par rapport aux valeurs réelles pour les ensembles d'entraînement et de test.
+    Chaque prédiction multi-step est affichée dans un sous-graphe distinct.
 
     Args:
         train_true (np.ndarray): Valeurs réelles de l'ensemble d'entraînement.
@@ -66,35 +67,37 @@ def plot_predictions(train_true, train_pred, test_true, test_pred, n_steps, titl
         test_true (np.ndarray): Valeurs réelles de l'ensemble de test.
         test_pred (np.ndarray): Prédictions de l'ensemble de test.
         n_steps (int): Nombre de pas de temps utilisés pour les séquences.
+        n_out (int): Nombre de pas de temps prédits.
         title (str, optional): Titre du graphique. Par défaut à 'Prédictions vs Réel'.
     """
     try:
-        plt.figure(figsize=(14,7))
+        fig, axes = plt.subplots(n_out, 1, figsize=(14, 5 * n_out), sharex=True)
         
-        # Jeu d'entraînement
-        plt.plot(train_true, label='Train Réel', color='green')
-        plt.plot(train_pred, label='Train Prédit', color='orange')
+        if n_out == 1:
+            axes = [axes]  # Assure que axes est toujours une liste
 
-        # Jeu de test
-        offset = len(train_true)
-        plt.plot(
-            np.arange(offset, offset+len(test_true)), 
-            test_true, 
-            label='Test Réel', 
-            color='blue'
-        )
-        plt.plot(
-            np.arange(offset, offset+len(test_pred)), 
-            test_pred, 
-            label='Test Prédit', 
-            color='red'
-        )
+        # Couleurs pour distinguer les ensembles
+        train_color = 'green'
+        test_color = 'blue'
+        pred_train_color = 'lime'
+        pred_test_color = 'cyan'
 
-        plt.title(title)
+        for step in range(n_out):
+            ax = axes[step]
+            ax.plot(train_true[:, step], label='Train Réel', color=train_color)
+            ax.plot(train_pred[:, step], label=f'Train Prédit Step {step+1}', linestyle='--', color=pred_train_color)
+            
+            offset = len(train_true)
+            ax.plot(test_true[:, step], label='Test Réel', color=test_color)
+            ax.plot(test_pred[:, step], label=f'Test Prédit Step {step+1}', linestyle='--', color=pred_test_color)
+            
+            ax.set_title(f'{title} - Step {step+1}')
+            ax.set_ylabel('Prix de Clôture (Dénormalisé)')
+            ax.legend()
+            ax.grid(True)
+        
         plt.xlabel('Index Échantillon (Approx)')
-        plt.ylabel('Prix de Clôture (Dénormalisé)')
-        plt.legend()
-        plt.grid(True)
+        plt.tight_layout()
         plt.show()
         logging.info("Graphique des prédictions affiché avec succès.")
     except Exception as e:

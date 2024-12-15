@@ -1,4 +1,5 @@
 # database.py
+
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, BigInteger, Index,
     ForeignKeyConstraint, desc, asc
@@ -6,6 +7,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import logging
+import numpy as np
 import pandas as pd
 
 Base = declarative_base()
@@ -47,11 +49,12 @@ class Prediction(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String, index=True, nullable=False)
     timestamp = Column(BigInteger, index=True, nullable=False)
+    step = Column(Integer, nullable=False)  # Indique l'étape de la prédiction (1, 2, 3)
     predicted_close = Column(Float, nullable=False)
     confidence_level = Column(Float, nullable=False)
     
     __table_args__ = (
-        Index('idx_predictions_symbol_timestamp', 'symbol', 'timestamp'),
+        Index('idx_predictions_symbol_timestamp_step', 'symbol', 'timestamp', 'step'),
         ForeignKeyConstraint(
             ['symbol', 'timestamp'],
             ['market_data.symbol', 'market_data.timestamp']
@@ -148,41 +151,46 @@ def store_indicators_to_db(indicators: pd.DataFrame, symbol: str, db_path: str):
     finally:
         session.close()
 
-def store_predictions_to_db(predictions: pd.DataFrame, symbol: str, db_path: str):
+def store_predictions_to_db(predictions: np.ndarray, timestamps: np.ndarray, symbol: str, db_path: str, n_out: int):
     """
-    Insère les prédictions dans la base de données sans duplications.
+    Insère les prédictions multi-step dans la base de données sans duplications.
+
+    Args:
+        predictions (np.ndarray): Prédictions multi-step (samples, n_out).
+        timestamps (np.ndarray): Timestamps correspondants aux prédictions.
+        symbol (str): Symbole de trading.
+        db_path (str): Chemin vers la base de données.
+        n_out (int): Nombre de pas de temps prédits.
     """
     try:
         engine = get_engine(db_path)
         session = get_session(engine)
         
-        required_columns = ['timestamp', 'predicted_close', 'confidence_level']
-        if not all(col in predictions.columns for col in required_columns):
-            missing = [col for col in required_columns if col not in predictions.columns]
-            raise ValueError(f"Les colonnes manquantes pour les prédictions : {missing}")
-
-        predictions['timestamp'] = predictions['timestamp'].astype(int)
-        
-        # Récupérer les timestamps déjà présents pour le symbole
-        existing_timestamps = set(
-            ts for (ts,) in session.query(Prediction.timestamp).filter(Prediction.symbol == symbol).all()
+        # Récupérer les timestamps et steps déjà présents pour le symbole
+        existing_entries = set(
+            (ts, step) for (ts, step) in session.query(Prediction.timestamp, Prediction.step).filter(Prediction.symbol == symbol).all()
         )
         
-        # Filtrer les nouvelles prédictions
-        prediction_objects = [
-            Prediction(
-                symbol=symbol,
-                timestamp=row['timestamp'],
-                predicted_close=row['predicted_close'],
-                confidence_level=row['confidence_level']
-            )
-            for _, row in predictions.iterrows() if row['timestamp'] not in existing_timestamps
-        ]
+        prediction_objects = []
+        for i, ts in enumerate(timestamps):
+            for step in range(1, n_out + 1):
+                predicted_close = predictions[i, step - 1]
+                predicted_timestamp = ts + step * 60000  # Supposant que chaque bougie est de 1 minute
+                if (predicted_timestamp, step) not in existing_entries:
+                    prediction_objects.append(
+                        Prediction(
+                            symbol=symbol,
+                            timestamp=int(predicted_timestamp),
+                            step=step,
+                            predicted_close=float(predicted_close),
+                            confidence_level=1.0  # À ajuster selon votre logique
+                        )
+                    )
         
         if prediction_objects:
             session.bulk_save_objects(prediction_objects)
             session.commit()
-            logging.info(f"{len(prediction_objects)} nouvelles prédictions insérées avec succès dans la base de données pour {symbol}.")
+            logging.info(f"{len(prediction_objects)} nouvelles prédictions insérées dans la base de données pour {symbol}.")
         else:
             logging.info("Aucune nouvelle prédiction à insérer.")
     except Exception as e:

@@ -1,9 +1,11 @@
+# config.yaml
 trading:
   db_path: 'trading_bot.db'
   symbol: 'BTCUSDT'
   interval: '1m'
-  limit: 5000
+  limit: 1000
   n_steps: 45
+  n_out: 10  # Nombre de bougies à prédire
   train_ratio: 0.75
   val_ratio: 0.2
 

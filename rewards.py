@@ -14,106 +14,85 @@ class Reward(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String, nullable=False)
     timestamp = Column(BigInteger, nullable=False)
+    step = Column(Integer, nullable=False)  # Indique l'étape de la prédiction (1, 2, 3)
     predicted_close = Column(Float, nullable=False)
     actual_close = Column(Float, nullable=False)
     reward = Column(Float, nullable=False)
 
-def define_reward_function():
+def define_reward_function_multi_step(n_out: int):
     """
-    Fonction de récompense améliorée pour inclure les moyennes mobiles.
-    Retourne des récompenses positives pour de bonnes prédictions et négatives pour les mauvaises.
+    Fonction de récompense pour les prédictions multi-step.
+    Retourne des récompenses pour chaque étape de prédiction.
+
+    Args:
+        n_out (int): Nombre de pas de temps prédits.
+
+    Returns:
+        function: Fonction de récompense.
     """
     def reward_function(predictions, actuals, last_input_closes, last_rsi, last_stoch_k, last_ma_court, last_ma_long):
-        # Calcul de l'erreur absolue et récompense de base
-        errors = tf.abs(predictions - actuals)
-        reward_base = 1.0 - errors  # Plus l'erreur est faible, plus la récompense est élevée
+        """
+        Calcul de la récompense pour les prédictions multi-step.
 
-        # Calcul des différences et des signes
-        actual_diff = actuals - last_input_closes
-        pred_diff = predictions - last_input_closes
+        Args:
+            predictions (tf.Tensor): Prédictions du modèle (batch, n_out).
+            actuals (tf.Tensor): Valeurs réelles (batch, n_out).
+            last_input_closes (tf.Tensor): Dernières valeurs de clôture d'entrée.
+            last_rsi (tf.Tensor): Dernières valeurs RSI.
+            last_stoch_k (tf.Tensor): Dernières valeurs Stochastic K.
+            last_ma_court (tf.Tensor): Dernières moyennes mobiles courtes.
+            last_ma_long (tf.Tensor): Dernières moyennes mobiles longues.
 
-        actual_sign = tf.sign(actual_diff)
-        pred_sign = tf.sign(pred_diff)
+        Returns:
+            tf.Tensor: Récompenses pour chaque prédiction.
+        """
+        rewards = []
+        for step in range(n_out):
+            pred = predictions[:, step]
+            actual = actuals[:, step]
+            error = tf.abs(pred - actual)
+            
+            # Paramètres pour le calcul de la récompense
+            sigma = 0.05  # Contrôle la sensibilité de la récompense par rapport à l'erreur
+            max_reward = 1.0
+            min_reward = -0.5
 
-        # Facteur de direction
-        direction_correct = tf.equal(actual_sign, pred_sign)
-        direction_factor = tf.where(direction_correct, 0.1, -0.1)
+            # Calcul de la récompense basée sur une fonction exponentielle inversée
+            reward = tf.exp(- (error ** 2) / (2 * sigma ** 2))  # Récompense entre 0 et 1
 
-        final_reward = reward_base + direction_factor
+            # Ajustement de la récompense basée sur la direction
+            actual_diff = actual - last_input_closes[:, 0]
+            pred_diff = pred - last_input_closes[:, 0]
+            actual_sign = tf.sign(actual_diff)
+            pred_sign = tf.sign(pred_diff)
 
-        # Conditions RSI/Stoch
-        overbought_rsi = last_rsi > 70
-        oversold_rsi = last_rsi < 30
-        overbought_stoch = last_stoch_k > 80
-        oversold_stoch = last_stoch_k < 20
+            direction_correct = tf.cast(tf.equal(actual_sign, pred_sign), tf.float32)
+            reward += 0.2 * direction_correct  # Récompense additionnelle pour la bonne direction
 
-        # Ajustements RSI/Stoch
-        rsi_adj = tf.zeros_like(final_reward)
-        rsi_adj = tf.where(overbought_rsi & (pred_sign > 0), rsi_adj - 0.05, rsi_adj)
-        rsi_adj = tf.where(overbought_rsi & (pred_sign <= 0), rsi_adj + 0.05, rsi_adj)
-        rsi_adj = tf.where(oversold_rsi & (pred_sign < 0), rsi_adj - 0.05, rsi_adj)
-        rsi_adj = tf.where(oversold_rsi & (pred_sign >= 0), rsi_adj + 0.05, rsi_adj)
-
-        stoch_adj = tf.zeros_like(final_reward)
-        stoch_adj = tf.where(overbought_stoch & (pred_sign > 0), stoch_adj - 0.05, stoch_adj)
-        stoch_adj = tf.where(overbought_stoch & (pred_sign <= 0), stoch_adj + 0.05, stoch_adj)
-        stoch_adj = tf.where(oversold_stoch & (pred_sign < 0), stoch_adj - 0.05, stoch_adj)
-        stoch_adj = tf.where(oversold_stoch & (pred_sign >= 0), stoch_adj + 0.05, stoch_adj)
-
-        final_reward += (rsi_adj + stoch_adj)
-
-        # Détermination de la tendance via MA
-        trend_condition = tf.sign(last_ma_court - last_ma_long)  # +1 haussier, -1 baissier, 0 neutre
-        bullish_rsi_stoch = (last_rsi > 50) & (last_stoch_k > 50)
-        bearish_rsi_stoch = (last_rsi < 50) & (last_stoch_k < 50)
-
-        trend_adj = tf.zeros_like(final_reward)
-        # Tendance haussière confirmée
-        confirmed_bullish = (trend_condition > 0) & bullish_rsi_stoch
-        # Tendance baissière confirmée
-        confirmed_bearish = (trend_condition < 0) & bearish_rsi_stoch
-
-        trend_adj = tf.where(
-            confirmed_bullish & (actual_sign > 0) & (pred_sign > 0),
-            trend_adj + 0.07,
-            trend_adj
-        )
-        trend_adj = tf.where(
-            confirmed_bearish & (actual_sign < 0) & (pred_sign < 0),
-            trend_adj + 0.07,
-            trend_adj
-        )
-
-        final_reward += trend_adj
-
-        # Conditions extrêmes
-        both_overheated = (last_rsi > 80) & (last_stoch_k > 80)
-        both_oversold = (last_rsi < 20) & (last_stoch_k < 20)
-
-        strong_up_threshold = 0.005
-        strong_down_threshold = -0.005
-
-        strong_up_condition = pred_diff > (strong_up_threshold * last_input_closes)
-        strong_down_condition = pred_diff < (strong_down_threshold * last_input_closes)
-
-        # Conditions de reversal
-        reversal_condition_overbought = both_overheated & (actual_sign > 0) & (pred_sign <= 0)
-        reversal_condition_oversold = both_oversold & (actual_sign < 0) & (pred_sign >= 0)
-
-        final_reward = tf.where(reversal_condition_overbought, final_reward - 0.05, final_reward)
-        final_reward = tf.where(reversal_condition_oversold, final_reward - 0.05, final_reward)
-
-        # Punition pour prédictions extrêmes
-        final_reward = tf.where(both_overheated & strong_up_condition, final_reward - 0.1, final_reward)
-        final_reward = tf.where(both_oversold & strong_down_condition, final_reward - 0.1, final_reward)
-
-        # Assurer que les récompenses sont dans une plage raisonnable
-        final_reward = tf.clip_by_value(final_reward, -1.0, 1.0)
-
+            # Normalisation de la récompense dans une plage spécifique
+            reward = tf.clip_by_value(reward, min_reward, max_reward)
+            rewards.append(reward)
+        
+        # Moyenne des récompenses sur les étapes pour une récompense globale par échantillon
+        final_reward = tf.reduce_mean(tf.stack(rewards), axis=0)
         return final_reward
     return reward_function
 
-def update_model_with_rewards(model, X, y, reward_function, optimizer):
+def update_model_with_rewards_multi_step(model, X, y, reward_function, optimizer, n_out: int):
+    """
+    Met à jour le modèle en fonction des récompenses multi-step.
+
+    Args:
+        model: Modèle TensorFlow.
+        X: Entrées.
+        y: Cibles.
+        reward_function: Fonction de récompense.
+        optimizer: Optimiseur TensorFlow.
+        n_out (int): Nombre de pas de temps prédits.
+
+    Returns:
+        Tuple contenant la perte et la récompense moyenne.
+    """
     close_index = 3
     rsi_index = 5
     stoch_k_index = 6
@@ -143,40 +122,63 @@ def update_model_with_rewards(model, X, y, reward_function, optimizer):
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
     return loss.numpy(), mean_reward.numpy()
 
-def log_rewards(predictions, actual_prices, timestamps, symbol='BTCUSDT', db_url='rewards.db'):
-    # Utiliser la même fonction de récompense pour le logging
-    # Normalement, cela devrait être similaire à la fonction utilisée pendant l'entraînement
-    # Pour simplifier, utiliser 1 - erreur comme récompense
-    errors = np.abs(predictions - actual_prices)
-    rewards = 1.0 - errors  # Assurer que les récompenses sont positives
+def log_rewards_multi_step(predictions, actual_prices, timestamps, symbol='BTCUSDT', db_url='rewards.db', n_out: int = 3):
+    """
+    Log les récompenses pour les prédictions multi-step dans la base de données.
 
-    engine = create_engine(f'sqlite:///{db_url}', echo=False)
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-
+    Args:
+        predictions (np.ndarray): Prédictions multi-step (samples, n_out).
+        actual_prices (np.ndarray): Valeurs réelles multi-step (samples, n_out).
+        timestamps (np.ndarray): Timestamps correspondants aux prédictions.
+        symbol (str, optional): Symbole de trading. Par défaut à 'BTCUSDT'.
+        db_url (str, optional): URL de la base de données. Par défaut à 'rewards.db'.
+        n_out (int, optional): Nombre de pas de temps prédits. Par défaut à 3.
+    """
     try:
-        reward_objects = [
-            Reward(
-                symbol=symbol,
-                timestamp=int(ts),
-                predicted_close=float(predictions[i]),
-                actual_close=float(actual_prices[i]),
-                reward=float(rewards[i])
-            )
-            for i, ts in enumerate(timestamps)
-        ]
+        # Calcul des récompenses basées sur l'erreur
+        rewards = 1.0 - np.abs(predictions - actual_prices)  # Simplification pour l'exemple
+
+        engine = create_engine(f'sqlite:///{db_url}', echo=False)
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        reward_objects = []
+        for i, ts in enumerate(timestamps):
+            for step in range(1, n_out + 1):
+                reward_objects.append(
+                    Reward(
+                        symbol=symbol,
+                        timestamp=int(ts) + step * 60000,  # Supposant que chaque bougie est de 1 minute
+                        step=step,
+                        predicted_close=float(predictions[i, step - 1]),
+                        actual_close=float(actual_prices[i, step - 1]),
+                        reward=float(rewards[i, step - 1])
+                    )
+                )
         
-        session.bulk_save_objects(reward_objects)
-        session.commit()
-        logging.info(f"{len(reward_objects)} récompenses insérées dans la base de données {db_url}.")
+        if reward_objects:
+            session.bulk_save_objects(reward_objects)
+            session.commit()
+            logging.info(f"{len(reward_objects)} récompenses multi-step insérées dans la base de données {db_url}.")
+        else:
+            logging.info("Aucune récompense multi-step à insérer.")
     except Exception as e:
         session.rollback()
-        logging.error(f"Erreur lors de l'insertion des récompenses : {e}")
+        logging.error(f"Erreur lors de l'insertion des récompenses multi-step : {e}")
     finally:
         session.close()
 
 def analyze_rewards(db_url='rewards.db'):
+    """
+    Analyse les récompenses stockées dans la base de données.
+
+    Args:
+        db_url (str, optional): URL de la base de données. Par défaut à 'rewards.db'.
+
+    Returns:
+        dict: Statistiques des récompenses.
+    """
     engine = create_engine(f'sqlite:///{db_url}', echo=False)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -191,6 +193,7 @@ def analyze_rewards(db_url='rewards.db'):
         df = pd.DataFrame([{
             'symbol': r.symbol,
             'timestamp': r.timestamp,
+            'step': r.step,
             'predicted_close': r.predicted_close,
             'actual_close': r.actual_close,
             'reward': r.reward

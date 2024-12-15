@@ -141,6 +141,28 @@ def create_sequences(features_scaled: np.ndarray, target_scaled: np.ndarray, n_s
     logging.info(f"{len(X)} séquences créées avec n_steps={n_steps}.")
     return X, y
 
+def create_multi_step_sequences(features_scaled: np.ndarray, target_scaled: np.ndarray, n_steps: int, n_out: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Crée des séquences pour les prédictions multi-step du modèle LSTM.
+
+    Args:
+        features_scaled (np.ndarray): Caractéristiques normalisées.
+        target_scaled (np.ndarray): Cible normalisée.
+        n_steps (int): Nombre de pas de temps pour les séquences d'entrée.
+        n_out (int): Nombre de pas de temps à prédire.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: Séquences de caractéristiques et séquences de cibles.
+    """
+    X, y = [], []
+    for i in range(n_steps, len(features_scaled) - n_out + 1):
+        X.append(features_scaled[i - n_steps:i])
+        y.append(target_scaled[i:i + n_out].flatten())
+    X = np.array(X)
+    y = np.array(y)
+    logging.info(f"{len(X)} séquences créées avec n_steps={n_steps} et n_out={n_out}.")
+    return X, y
+
 def split_data(X: np.ndarray, y: np.ndarray, train_ratio: float = 0.7, val_ratio: float = 0.15) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Divise les données en ensembles d'entraînement, de validation et de test.
@@ -173,18 +195,50 @@ def split_data(X: np.ndarray, y: np.ndarray, train_ratio: float = 0.7, val_ratio
     
     return X_train, y_train, X_val, y_val, X_test, y_test
 
-def prepare_data_for_lstm(data: pd.DataFrame, n_steps: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, MinMaxScaler, MinMaxScaler, pd.DataFrame]:
+def split_data_multi_step(X: np.ndarray, y: np.ndarray, train_ratio: float = 0.7, val_ratio: float = 0.15) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Divise les données en ensembles d'entraînement, de validation et de test pour les prédictions multi-step.
+
+    Args:
+        X (np.ndarray): Séquences de caractéristiques.
+        y (np.ndarray): Séquences de cibles.
+        train_ratio (float, optional): Proportion des données pour l'entraînement. Par défaut à 0.7.
+        val_ratio (float, optional): Proportion des données pour la validation. Par défaut à 0.15.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            Données d'entraînement, de validation et de test.
+    """
+    total_samples = X.shape[0]
+    train_end = int(total_samples * train_ratio)
+    val_end = int(total_samples * (train_ratio + val_ratio))
+
+    X_train = X[:train_end]
+    y_train = y[:train_end]
+    X_val = X[train_end:val_end]
+    y_val = y[train_end:val_end]
+    X_test = X[val_end:]
+    y_test = y[val_end:]
+    
+    logging.info("Données divisées en :")
+    logging.info(f" - Entraînement : {X_train.shape[0]} échantillons")
+    logging.info(f" - Validation : {X_val.shape[0]} échantillons")
+    logging.info(f" - Test : {X_test.shape[0]} échantillons")
+    
+    return X_train, y_train, X_val, y_val, X_test, y_test
+
+def prepare_data_for_lstm(data: pd.DataFrame, n_steps: int, n_out: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, MinMaxScaler, MinMaxScaler, pd.DataFrame]:
     """
     Prépare les données pour l'entraînement du modèle LSTM en nettoyant, calculant les indicateurs,
-    normalisant et créant des séquences.
+    normalisant et créant des séquences multi-step.
 
     Args:
         data (pd.DataFrame): DataFrame contenant les données brutes de marché.
-        n_steps (int): Nombre de pas de temps pour les séquences.
+        n_steps (int): Nombre de pas de temps pour les séquences d'entrée.
+        n_out (int): Nombre de pas de temps à prédire.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray, MinMaxScaler, MinMaxScaler, pd.DataFrame]:
-            Données d'entraînement, de validation, de test, les scalers et la DataFrame nettoyée.
+        Tuple contenant les ensembles d'entraînement, de validation, de test, les scalers et la DataFrame nettoyée.
     """
     try:
         df_cleaned = clean_market_data(data)
@@ -222,12 +276,12 @@ def prepare_data_for_lstm(data: pd.DataFrame, n_steps: int) -> Tuple[np.ndarray,
             raise ValueError("NaN ou Inf détecté dans les target_scaled")
         logging.info("Aucune valeur NaN ou Inf détectée dans les données scalées.")
         
-        # Création des séquences pour le modèle LSTM
-        X, y = create_sequences(features_scaled, target_scaled, n_steps)
+        # Création des séquences multi-step pour le modèle LSTM
+        X, y = create_multi_step_sequences(features_scaled, target_scaled, n_steps, n_out)
         
         # Division des données en ensembles d'entraînement, de validation et de test
-        X_train, y_train, X_val, y_val, X_test, y_test = split_data(X, y, train_ratio=0.7, val_ratio=0.15)
-        logging.info("Données préparées pour le modèle LSTM.")
+        X_train, y_train, X_val, y_val, X_test, y_test = split_data_multi_step(X, y, train_ratio=0.7, val_ratio=0.15)
+        logging.info("Données préparées pour le modèle LSTM multi-step.")
         
         return X_train, y_train, X_val, y_val, X_test, y_test, scaler_features, scaler_target, df_cleaned
     except Exception as e:

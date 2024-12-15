@@ -8,3 +8,4 @@ python-dotenv
 SQLAlchemy
 ta
 matplotlib
+seaborn

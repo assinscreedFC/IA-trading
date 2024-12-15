@@ -1,4 +1,5 @@
-
+# main.py
+import os
 import numpy as np
 import pandas as pd
 import logging
@@ -11,14 +12,16 @@ from data_collector import get_market_data, get_historical_market_data
 from utils import setup_logging, load_config, setup_binance_api
 from database import (
     store_market_data_to_db, create_tables, get_engine, get_latest_timestamp, 
-    MarketData, get_session, get_earliest_timestamp, delete_old_candles
+    MarketData, get_session, get_earliest_timestamp, delete_old_candles, 
+    store_predictions_to_db
 )
 from indicators import calculate_rsi, calculate_stochastic_rsi, calculate_atr
 from visualization import plot_all_indicators, plot_predictions, plot_reward_history
 from preprocessing import prepare_data_for_lstm
 from model import build_improved_model
 from rewards import (
-    define_reward_function, update_model_with_rewards, log_rewards, analyze_rewards
+    define_reward_function_multi_step, update_model_with_rewards_multi_step, 
+    log_rewards_multi_step, analyze_rewards
 )
 
 def train_with_mse(model: tf.keras.Model, X_train: np.ndarray, y_train: np.ndarray, 
@@ -79,10 +82,11 @@ def main():
     # Paramètres de trading
     symbol = config.get('trading', {}).get('symbol', 'BTCUSDT')
     interval = config.get('trading', {}).get('interval', '1m')
-    limit = config.get('trading', {}).get('limit', 1000000)  # Limite définie dans config.yaml
-    n_steps = config.get('trading', {}).get('n_steps', 30)
-    train_ratio = config.get('trading', {}).get('train_ratio', 0.7)
-    val_ratio = config.get('trading', {}).get('val_ratio', 0.15)
+    limit = config.get('trading', {}).get('limit', 5000)  # Mis à jour selon config.yaml
+    n_steps = config.get('trading', {}).get('n_steps', 45)
+    train_ratio = config.get('trading', {}).get('train_ratio', 0.75)
+    val_ratio = config.get('trading', {}).get('val_ratio', 0.2)
+    n_out = config.get('trading', {}).get('n_out', 1)  # Nombre de bougies à prédire
 
     # Initialisation de l'API Binance
     try:
@@ -235,8 +239,8 @@ def main():
 
     # Nettoyage des indicateurs et préparation des données pour le modèle LSTM
     try:
-        X_train, y_train, X_val, y_val, X_test, y_test, scaler_features, scaler_target, df_cleaned = prepare_data_for_lstm(df_all, n_steps)
-        logging.info("Données préparées pour le modèle LSTM.")
+        X_train, y_train, X_val, y_val, X_test, y_test, scaler_features, scaler_target, df_cleaned = prepare_data_for_lstm(df_all, n_steps, n_out)
+        logging.info("Données préparées pour le modèle LSTM multi-step.")
         print(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
         print(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
         print(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
@@ -256,8 +260,8 @@ def main():
     # Construction du modèle LSTM amélioré
     try:
         n_features = X_train.shape[2]
-        model = build_improved_model(n_steps, n_features)
-        logging.info(f"Modèle LSTM amélioré construit avec {n_steps} pas de temps et {n_features} caractéristiques.")
+        model = build_improved_model(n_steps, n_features, n_out)
+        logging.info(f"Modèle LSTM amélioré construit avec {n_steps} pas de temps, {n_features} caractéristiques et {n_out} sorties.")
     except Exception as e:
         logging.error(f"Erreur lors de la construction du modèle LSTM : {e}")
         return
@@ -271,8 +275,8 @@ def main():
             y_train, 
             X_val, 
             y_val, 
-            epochs=config.get('model', {}).get('epochs_mse', 200), 
-            batch_size=config.get('model', {}).get('batch_size_mse', 512)
+            epochs=config.get('model', {}).get('epochs_mse', 60), 
+            batch_size=config.get('model', {}).get('batch_size_mse', 256)
         )
         logging.info("Phase 1: Entraînement avec MSE terminé.")
     except Exception as e:
@@ -281,11 +285,11 @@ def main():
 
     # PHASE 2 : Entraînement basé sur la récompense
     try:
-        optimizer = tf.keras.optimizers.Adam(learning_rate=config.get('model', {}).get('learning_rate_reward', 0.00005))  # Learning rate réduit pour phase de récompense
-        reward_function = define_reward_function()
+        optimizer = tf.keras.optimizers.Adam(learning_rate=config.get('model', {}).get('learning_rate_reward', 0.00004))  # Learning rate réduit pour phase de récompense
+        reward_function = define_reward_function_multi_step(n_out=n_out)
 
-        reward_epochs = config.get('model', {}).get('epochs_reward', 300)
-        batch_size = config.get('model', {}).get('batch_size_reward', 1024)
+        reward_epochs = config.get('model', {}).get('epochs_reward', 40)
+        batch_size = config.get('model', {}).get('batch_size_reward', 128)
         train_size = X_train.shape[0]
 
         logging.info("Phase 2: Entraînement basé sur la récompense.")
@@ -302,9 +306,9 @@ def main():
                 start = b * batch_size
                 end = start + batch_size
                 X_batch = X_train_shuffled[start:end]
-                y_batch = y_train_shuffled[start:end].reshape(-1,1)
+                y_batch = y_train_shuffled[start:end]
 
-                combined_loss, mean_reward = update_model_with_rewards(model, X_batch, y_batch, reward_function, optimizer)
+                combined_loss, mean_reward = update_model_with_rewards_multi_step(model, X_batch, y_batch, reward_function, optimizer, n_out=n_out)
                 epoch_rewards.append(mean_reward)
 
             epoch_mean_reward = np.mean(epoch_rewards)
@@ -321,7 +325,7 @@ def main():
     try:
         predictions_test = model.predict(X_test, batch_size=1024)
         predictions_test_inv = scaler_target.inverse_transform(predictions_test)
-        y_test_inv = scaler_target.inverse_transform(y_test.reshape(-1,1))
+        y_test_inv = scaler_target.inverse_transform(y_test)
 
         mae_test = np.mean(np.abs(predictions_test_inv - y_test_inv))
         logging.info(f"MAE sur le test set: {mae_test}")
@@ -330,20 +334,21 @@ def main():
         logging.error(f"Erreur lors de l'évaluation sur le test set : {e}")
         return
 
-     # Log des récompenses sur le jeu de test
+    # Log des récompenses sur le jeu de test
     try:
         test_length = len(y_test)
         test_timestamps = df_cleaned['timestamp'].iloc[-test_length:].values
-        log_rewards(
-            predictions=predictions_test_inv.flatten(), 
-            actual_prices=y_test_inv.flatten(),
+        log_rewards_multi_step(
+            predictions=predictions_test_inv, 
+            actual_prices=y_test_inv, 
             timestamps=test_timestamps, 
             symbol=symbol, 
-            db_url='rewards.db'
+            db_url='rewards.db',
+            n_out=n_out
         )
-        logging.info("Récompenses loggées avec succès.")
+        logging.info("Récompenses multi-step loggées avec succès.")
     except Exception as e:
-        logging.error(f"Erreur lors du log des récompenses : {e}")
+        logging.error(f"Erreur lors du log des récompenses multi-step : {e}")
         return
 
     # Analyse des récompenses
@@ -365,14 +370,19 @@ def main():
     try:
         predictions_train = model.predict(X_train, batch_size=512)
         predictions_train_inv = scaler_target.inverse_transform(predictions_train)
-        y_train_inv = scaler_target.inverse_transform(y_train.reshape(-1,1))
+        y_train_inv = scaler_target.inverse_transform(y_train)
+
+        predictions_test = model.predict(X_test, batch_size=1024)
+        predictions_test_inv = scaler_target.inverse_transform(predictions_test)
+        y_test_inv = scaler_target.inverse_transform(y_test)
 
         plot_predictions(
-            train_true=y_train_inv.flatten(), 
-            train_pred=predictions_train_inv.flatten(),
-            test_true=y_test_inv.flatten(),
-            test_pred=predictions_test_inv.flatten(),
-            n_steps=n_steps,
+            train_true=y_train_inv, 
+            train_pred=predictions_train_inv, 
+            test_true=y_test_inv, 
+            test_pred=predictions_test_inv, 
+            n_steps=n_steps, 
+            n_out=n_out,
             title='Prédictions vs Valeurs Réelles (Train et Test)'
         )
     except Exception as e:
@@ -385,7 +395,7 @@ def main():
         logging.error(f"Erreur lors de la visualisation de l'évolution des récompenses : {e}")
     '''
 
-    # Prédiction du prochain point futur
+    # Prédiction des prochaines n_out bougies
     try:
         new_data = df_cleaned.tail(n_steps)
         new_data_input = new_data[
@@ -397,12 +407,25 @@ def main():
         scaler_target = joblib.load('scaler_target.save')
         new_data_input_scaled = scaler_features.transform(new_data_input.reshape(-1, n_features)).reshape(1, n_steps, n_features)
         
-        next_pred = model.predict(new_data_input_scaled)
-        next_pred_inv = scaler_target.inverse_transform(next_pred)
-        print("Prochaine valeur de clôture prédite :", next_pred_inv[0,0])
-        logging.info(f"Prochaine valeur de clôture prédite : {next_pred_inv[0,0]}")
+        # Prédiction multi-step
+        next_preds = model.predict(new_data_input_scaled)
+        next_preds_inv = scaler_target.inverse_transform(next_preds)
+        print(f"Prochaines {n_out} valeurs de clôture prédites :", next_preds_inv.flatten())
+        logging.info(f"Prochaines {n_out} valeurs de clôture prédites : {next_preds_inv.flatten()}")
+        
+        # Stockage des prédictions multi-step
+        latest_timestamp = df_cleaned['timestamp'].iloc[-1]
+        prediction_timestamps = np.array([latest_timestamp + (i+1)*60000 for i in range(n_out)])  # Supposant que chaque bougie est de 1 minute
+        store_predictions_to_db(
+            predictions=next_preds_inv,
+            timestamps=prediction_timestamps,
+            symbol=symbol,
+            db_path=db_path,
+            n_out=n_out
+        )
+        logging.info("Prédictions multi-step stockées avec succès.")
     except Exception as e:
-        logging.error(f"Erreur lors de la prédiction du prochain point futur : {e}")
+        logging.error(f"Erreur lors de la prédiction des prochains points futurs : {e}")
 
 if __name__ == '__main__':
     main()
