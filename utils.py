@@ -15,12 +15,28 @@ def setup_logging(log_file='trading_bot.log'):
         ]
     )
 
+
 def load_config(config_path='config.yaml'):
-    if not os.path.exists(config_path):
-        logging.error(f"Le fichier de configuration '{config_path}' est introuvable.")
-        raise FileNotFoundError(f"Le fichier de configuration '{config_path}' est introuvable.")
-    with open(config_path, 'r') as file:
-        return yaml.safe_load(file)
+    """
+    Charge la configuration depuis un fichier YAML.
+    
+    Args:
+        config_path (str): Chemin vers le fichier de configuration YAML.
+    
+    Returns:
+        dict: Configuration chargée.
+    """
+    try:
+        with open(config_path, 'r') as file:
+            config = yaml.safe_load(file)
+            logging.info(f"Configuration chargée depuis {config_path}.")
+            return config
+    except FileNotFoundError:
+        logging.error(f"Fichier de configuration {config_path} non trouvé.")
+        return {}
+    except yaml.YAMLError as exc:
+        logging.error(f"Erreur de parsing YAML: {exc}")
+        return {}
 
 def setup_binance_api(config):
     """
