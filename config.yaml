@@ -5,13 +5,13 @@ trading:
   interval: '1m'
   limit: 1000
   n_steps: 45
-  n_out: 10  # Nombre de bougies à prédire
+  n_out: 5  # Nombre de bougies à prédire
   train_ratio: 0.75
   val_ratio: 0.2
 
 model:
-  epochs_mse: 60
-  batch_size_mse: 256
-  learning_rate_reward: 0.00004
-  epochs_reward: 40
-  batch_size_reward: 128
+  epochs_mse: 100
+  batch_size_mse: 128
+  learning_rate_reward: 0.00006
+  epochs_reward: 100
+  batch_size_reward: 64

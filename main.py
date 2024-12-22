@@ -12,7 +12,7 @@ from data_collector import get_market_data, get_historical_market_data
 from utils import setup_logging, load_config, setup_binance_api
 from database import (
     store_market_data_to_db, create_tables, get_engine, get_latest_timestamp, 
-    MarketData, get_session, get_earliest_timestamp, delete_old_candles, 
+    MarketData, get_session, get_earliest_timestamp, delete_old_candles,store_indicators_to_db, 
     store_predictions_to_db
 )
 from indicators import calculate_rsi, calculate_stochastic_rsi, calculate_atr
@@ -224,6 +224,9 @@ def main():
         df_all['stochastic_d'] = stochastic_rsi['stochastic_d']
         df_all['atr'] = calculate_atr(df_all, window=14)
         logging.info("Indicateurs calculés.")
+
+        # Stockage des indicateurs dans la base de données
+        store_indicators_to_db(df_all[['timestamp', 'rsi', 'stochastic_k', 'stochastic_d', 'atr']], symbol, db_path)
     except Exception as e:
         logging.error(f"Erreur lors du calcul des indicateurs : {e}")
         return
@@ -376,6 +379,13 @@ def main():
         predictions_test_inv = scaler_target.inverse_transform(predictions_test)
         y_test_inv = scaler_target.inverse_transform(y_test)
 
+        # Stockage des prédictions d'entraînement et de test dans la base de données
+        train_timestamps = df_cleaned['timestamp'].iloc[:len(y_train)].values
+        store_predictions_to_db(predictions_train_inv, train_timestamps, symbol, db_path, n_out)
+
+        test_timestamps = df_cleaned['timestamp'].iloc[-len(y_test):].values
+        store_predictions_to_db(predictions_test_inv, test_timestamps, symbol, db_path, n_out)
+
         plot_predictions(
             train_true=y_train_inv, 
             train_pred=predictions_train_inv, 
@@ -395,7 +405,7 @@ def main():
         logging.error(f"Erreur lors de la visualisation de l'évolution des récompenses : {e}")
     '''
 
-    # Prédiction des prochaines n_out bougies
+   # Prédiction des prochaines n_out bougies
     try:
         new_data = df_cleaned.tail(n_steps)
         new_data_input = new_data[
@@ -415,7 +425,7 @@ def main():
         
         # Stockage des prédictions multi-step
         latest_timestamp = df_cleaned['timestamp'].iloc[-1]
-        prediction_timestamps = np.array([latest_timestamp + (i+1)*60000 for i in range(n_out)])  # Supposant que chaque bougie est de 1 minute
+        prediction_timestamps = np.array([latest_timestamp])  # Passer un seul timestamp
         store_predictions_to_db(
             predictions=next_preds_inv,
             timestamps=prediction_timestamps,

@@ -9,3 +9,4 @@ SQLAlchemy
 ta
 matplotlib
 seaborn
+joblib
